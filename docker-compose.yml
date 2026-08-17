@@ -1,5 +1,3 @@
-version: "3.3"
-
 services:
   telegram_media_downloader:
     image: ghcr.io/wyatt323/telegram_media_downloader:latest
