@@ -313,6 +313,12 @@ async def download_task(
 
     node.download_status[message.id] = download_status
 
+    # A message now has a terminal download status. Persist immediately so a
+    # Docker restart, network interruption, or a stalled later task cannot
+    # lose the already completed message checkpoint.
+    if not node.bot:
+        app.update_config()
+
     file_size = os.path.getsize(file_name) if file_name else 0
 
     await upload_telegram_chat(
@@ -529,6 +535,10 @@ async def worker(client: pyrogram.client.Client):
             node: TaskNode = item[1]
 
             if node.is_stop_transmission:
+                app.set_download_id(node, message.id, DownloadStatus.SkipDownload)
+                node.download_status[message.id] = DownloadStatus.SkipDownload
+                if not node.bot:
+                    app.update_config()
                 continue
 
             if node.client:
