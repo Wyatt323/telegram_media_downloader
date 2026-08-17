@@ -2,8 +2,9 @@ version: "3.3"
 
 services:
   telegram_media_downloader:
-    image: tangyoha/telegram_media_downloader:latest
-    build: .
+    image: ghcr.io/wyatt323/telegram_media_downloader:latest
+    # 如需在本机从源码构建镜像，取消下一行注释：
+    # build: .
     ports:
       # Here is what you need to edit
       - "5000:5000"
