@@ -3,6 +3,7 @@ import asyncio
 import logging
 import os
 import shutil
+import signal
 import time
 from typing import List, Optional, Tuple, Union
 
@@ -621,9 +622,8 @@ async def run_until_all_task_finish():
                 finish = False
 
         if (not app.bot_token and finish) or app.restart_program:
-            # Keep the checkpoint durable as soon as the batch is complete.
-            # Previously this only happened in main()'s finally block, which
-            # required stopping the container before progress was persisted.
+            # Persist only after a normal batch; shutdown persistence is handled
+            # by main()'s finally block, including Docker SIGTERM.
             if not app.restart_program:
                 app.update_config()
                 logger.success(
@@ -655,6 +655,27 @@ async def stop_server(client: pyrogram.Client):
     await client.stop()
 
 
+def _persist_checkpoint():
+    """Persist progress without letting a checkpoint error skip cleanup."""
+    try:
+        logger.info(f"{_t('update config')}......")
+        app.update_config()
+        logger.success(
+            f"{_t('Updated last read message_id to config file')}, "
+            f"{_t('total download')} {app.total_download_task}, "
+            f"{_t('total upload file')} "
+            f"{app.cloud_drive_config.total_upload_success_file_count}"
+        )
+    except Exception as exc:  # pragma: no cover - defensive shutdown path
+        logger.exception(f"Unable to persist checkpoint: {exc}")
+
+
+def _handle_shutdown_signal(signum, _frame):
+    """Make Docker SIGTERM follow the same graceful checkpoint path as SIGINT."""
+    logger.info(f"Received signal {signum}; shutting down gracefully")
+    raise KeyboardInterrupt
+
+
 def main():
     """Main function of the downloader."""
     tasks = []
@@ -670,17 +691,12 @@ def main():
     try:
         app.pre_run()
         init_web(app)
-
         set_max_concurrent_transmissions(client, app.max_concurrent_transmissions)
-
         app.loop.run_until_complete(start_server(client))
         logger.success(_t("Successfully started (Press Ctrl+C to stop)"))
-
         app.loop.create_task(download_all_chat(client))
         for _ in range(app.max_download_task):
-            task = app.loop.create_task(worker(client))
-            tasks.append(task)
-
+            tasks.append(app.loop.create_task(worker(client)))
         if app.bot_token:
             app.loop.run_until_complete(
                 start_download_bot(app, client, add_download_task, download_chat_task)
@@ -698,17 +714,13 @@ def main():
         for task in tasks:
             task.cancel()
         logger.info(_t("Stopped!"))
-        # check_for_updates(app.proxy)
-        logger.info(f"{_t('update config')}......")
-        app.update_config()
-        logger.success(
-            f"{_t('Updated last read message_id to config file')},"
-            f"{_t('total download')} {app.total_download_task}, "
-            f"{_t('total upload file')} "
-            f"{app.cloud_drive_config.total_upload_success_file_count}"
-        )
+        _persist_checkpoint()
 
 
 if __name__ == "__main__":
+    # Docker Compose sends SIGTERM for `docker compose restart` / `stop`.
+    # Translate it into KeyboardInterrupt so main() reaches its finally block.
+    signal.signal(signal.SIGTERM, _handle_shutdown_signal)
+    signal.signal(signal.SIGINT, _handle_shutdown_signal)
     if _check_config():
         main()
